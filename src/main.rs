@@ -1,14 +1,58 @@
 extern crate chrono;
 extern crate dirs;
+extern crate docopt;
+extern crate serde;
 
 use std::borrow::ToOwned;
-use std::env;
 use std::fs;
 use std::io;
 use std::io::BufRead;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+
+use docopt::Docopt;
+
+use serde::Deserialize;
+
+const USAGE: &'static str = "
+notebk
+
+Usage:
+  notebk ls
+  notebk <path> ls [<count>]
+  notebk <path> which
+  notebk <path> delete
+  notebk <path>
+  notebk mv <src> <dst>
+  notebk -h | --help
+
+Options:
+  -h --help  Show this screen.
+
+Actions:
+  ls      list up to <count> (default 10) items from <path>
+
+  which   identify the filesystem path to <path>
+
+  delete  delete the entry at <path>
+
+  mv      move the entry at <src> to <dst>
+
+  <path>  open the entry at <path>
+";
+
+#[derive(Debug, Deserialize)]
+struct Args {
+    cmd_delete: bool,
+    cmd_ls: bool,
+    cmd_which: bool,
+    cmd_mv: bool,
+    arg_path: Option<String>,
+    arg_src: Option<String>,
+    arg_dst: Option<String>,
+    arg_count: Option<usize>,
+}
 
 fn read_file<P: AsRef<Path>>(path: P) -> io::Result<String> {
     fs::File::open(path.as_ref()).and_then(|mut f| {
@@ -229,76 +273,32 @@ impl Action {
         }
     }
 
-    fn parse(arguments: impl Iterator<Item = String>) -> Result<Self, ()> {
-        let args: Vec<_> = arguments.collect();
-        match args.get(0).map(String::as_str) {
-            None => Ok(Action::Open(NotebkPath::from_str("")?)),
-            Some("delete") => {
-                if args.len() != 2 {
-                    Err(())
-                } else {
-                    Ok(Action::Delete(NotebkPath::from_str(&args[1])?))
-                }
-            }
-            Some("which") => {
-                if args.len() != 2 {
-                    Err(())
-                } else {
-                    Ok(Action::Which(NotebkPath::from_str(&args[1])?))
-                }
-            }
-            Some("ls") => {
-                if args.len() == 1 {
-                    Ok(Action::List(
-                        NotebkPath {
-                            folders: Vec::new(),
-                            number: None,
-                        },
-                        10,
-                    ))
-                } else if args.len() == 2 {
-                    match usize::from_str(&args[1]) {
-                        Ok(n) => Ok(Action::List(
-                            NotebkPath {
-                                folders: Vec::new(),
-                                number: None,
-                            },
-                            n,
-                        )),
-                        Err(_) => Ok(Action::List(NotebkPath::from_str(&args[1])?, 10)),
-                    }
-                } else if args.len() == 3 {
-                    Ok(Action::List(
-                        NotebkPath::from_str(&args[1])?,
-                        usize::from_str(&args[2]).map_err(|_| ())?,
-                    ))
-                } else {
-                    Err(())
-                }
-            }
-            Some("mv") => {
-                if args.len() != 3 {
-                    Err(())
-                } else {
-                    Ok(Action::Move(
-                        NotebkPath::from_str(&args[1])?,
-                        NotebkPath::from_str(&args[2])?,
-                    ))
-                }
-            }
-            Some(p) => {
-                if args.len() != 1 {
-                    Err(())
-                } else {
-                    Ok(Action::Open(NotebkPath::from_str(p)?))
-                }
-            }
-        }
+    fn parse(args: Args) -> Result<Self, ()> {
+        Ok(if args.cmd_ls {
+            Action::List(
+                NotebkPath::from_str(&args.arg_path.unwrap_or_else(String::new))?,
+                args.arg_count.unwrap_or(10),
+            )
+        } else if args.cmd_which {
+            Action::Which(NotebkPath::from_str(&args.arg_path.unwrap())?)
+        } else if args.cmd_mv {
+            Action::Move(
+                NotebkPath::from_str(&args.arg_src.unwrap())?,
+                NotebkPath::from_str(&args.arg_dst.unwrap())?,
+            )
+        } else if args.cmd_delete {
+            Action::Delete(NotebkPath::from_str(&args.arg_path.unwrap())?)
+        } else {
+            Action::Open(NotebkPath::from_str(&args.arg_path.unwrap())?)
+        })
     }
 }
 
 fn main() {
-    let args = env::args().skip(1);
+    let args: Args = Docopt::new(USAGE)
+        .and_then(|d| d.deserialize())
+        .unwrap_or_else(|e| e.exit());
+    println!("{:#?}", args);
     let action = match Action::parse(args) {
         Ok(a) => a,
         Err(()) => {
@@ -321,8 +321,15 @@ mod tests {
 
     #[test]
     fn parse_which() {
-        let input = vec!["which", "4"];
-        let actual = Action::parse(input.into_iter().map(ToOwned::to_owned)).unwrap();
+        let input = vec!["notebk", "4", "which"];
+        let actual = Action::parse(
+            Docopt::new(USAGE)
+                .unwrap()
+                .argv(input)
+                .deserialize()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             Action::Which(NotebkPath {
                 folders: Vec::new(),
@@ -334,8 +341,15 @@ mod tests {
 
     #[test]
     fn parse_which_path() {
-        let input = vec!["which", "food/dessert/4"];
-        let actual = Action::parse(input.into_iter().map(ToOwned::to_owned)).unwrap();
+        let input = vec!["notebk", "food/dessert/4", "which"];
+        let actual = Action::parse(
+            Docopt::new(USAGE)
+                .unwrap()
+                .argv(input)
+                .deserialize()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             Action::Which(NotebkPath {
                 folders: vec!["food".to_owned(), "dessert".to_owned()],
@@ -347,8 +361,15 @@ mod tests {
 
     #[test]
     fn parse_open_path() {
-        let input = vec!["puzzles/math/4"];
-        let actual = Action::parse(input.into_iter().map(ToOwned::to_owned)).unwrap();
+        let input = vec!["notebk", "puzzles/math/4"];
+        let actual = Action::parse(
+            Docopt::new(USAGE)
+                .unwrap()
+                .argv(input)
+                .deserialize()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             Action::Open(NotebkPath {
                 folders: vec!["puzzles".to_owned(), "math".to_owned()],
@@ -360,8 +381,15 @@ mod tests {
 
     #[test]
     fn parse_null_list() {
-        let input = vec!["ls"];
-        let actual = Action::parse(input.into_iter().map(ToOwned::to_owned)).unwrap();
+        let input = vec!["notebk", "ls"];
+        let actual = Action::parse(
+            Docopt::new(USAGE)
+                .unwrap()
+                .argv(input)
+                .deserialize()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             Action::List(
                 NotebkPath {

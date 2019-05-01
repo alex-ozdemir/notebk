@@ -6,3 +6,5 @@ authors = ["Alex Ozdemir <aozdemir@hmc.edu>"]
 [dependencies]
 chrono = "0.4.0"
 dirs = "1.0"
+docopt = "1"
+serde = { version = "1", features = ["derive"] }
