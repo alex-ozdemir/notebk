@@ -19,7 +19,7 @@ const USAGE: &'static str = "
 notebk
 
 Usage:
-  notebk ls
+  notebk ls [<count>]
   notebk <path> ls [<count>]
   notebk <path> which
   notebk <path> delete
@@ -298,7 +298,6 @@ fn main() {
     let args: Args = Docopt::new(USAGE)
         .and_then(|d| d.deserialize())
         .unwrap_or_else(|e| e.exit());
-    println!("{:#?}", args);
     let action = match Action::parse(args) {
         Ok(a) => a,
         Err(()) => {
