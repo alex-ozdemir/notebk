@@ -109,7 +109,7 @@ fn most_recent(node: &fs::DirEntry) -> chrono::NaiveDate {
                 })
             })
             .map(|e| most_recent(&e))
-            .min()
+            .max()
             .unwrap_or(chrono::offset::Local::today().naive_local())
     } else {
         panic!("Unexpected sym link at {}", node.path().display())
