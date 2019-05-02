@@ -69,6 +69,53 @@ fn list(dir_path: &Path, n: usize) -> io::Result<()> {
     }
 }
 
+fn most_recent(node: &fs::DirEntry) -> chrono::NaiveDate {
+    let ft = node.file_type().unwrap();
+    if ft.is_file() {
+        chrono::NaiveDate::parse_from_str(
+            node.file_name().to_str().unwrap_or_else(|| {
+                eprintln!("Could not parse entry {} as a date", node.path().display());
+                std::process::exit(1)
+            }),
+            "%Y-%m-%d.md",
+        )
+        .unwrap_or_else(|e| {
+            eprintln!(
+                "Could not parse entry {} as a date because {}",
+                node.path().display(),
+                e
+            );
+            std::process::exit(1)
+        })
+    } else if ft.is_dir() {
+        fs::read_dir(&node.path())
+            .unwrap_or_else(|e| {
+                eprintln!(
+                    "Could not read directory {} because {}",
+                    node.path().display(),
+                    e
+                );
+                std::process::exit(1)
+            })
+            .into_iter()
+            .map(|e| {
+                e.unwrap_or_else(|e| {
+                    eprintln!(
+                        "Could not list directory {} because {}",
+                        node.path().display(),
+                        e
+                    );
+                    std::process::exit(1)
+                })
+            })
+            .map(|e| most_recent(&e))
+            .min()
+            .unwrap_or(chrono::offset::Local::today().naive_local())
+    } else {
+        panic!("Unexpected sym link at {}", node.path().display())
+    }
+}
+
 fn entries(dir_path: &Path) -> io::Result<Vec<fs::DirEntry>> {
     let mut listing = Vec::new();
     for entry_result in fs::read_dir(&dir_path)? {
@@ -76,7 +123,7 @@ fn entries(dir_path: &Path) -> io::Result<Vec<fs::DirEntry>> {
     }
     listing
         .as_mut_slice()
-        .sort_unstable_by_key(|e| e.file_name());
+        .sort_unstable_by_key(|e| most_recent(&e));
     listing.as_mut_slice().reverse();
     Ok(listing)
 }
