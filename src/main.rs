@@ -1,3 +1,4 @@
+extern crate ansi_term;
 extern crate chrono;
 extern crate dirs;
 extern crate docopt;
@@ -8,6 +9,8 @@ use std::io;
 use std::io::BufRead;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+
+use ansi_term::Colour::{Blue, Green};
 
 mod parser;
 
@@ -56,10 +59,10 @@ fn list(dir_path: &Path, n: usize) -> io::Result<()> {
                 println!(
                     "{:2}  {}",
                     i + 1,
-                    first_line.as_ref().map(String::as_str).unwrap_or("<empty>")
+                    Green.paint(first_line.as_ref().map(String::as_str).unwrap_or("<empty>"))
                 );
             } else {
-                println!("{:2}  {}/", i + 1, entry.file_name().to_string_lossy());
+                println!("{:2}  {}/", i + 1, Blue.paint(entry.file_name().to_string_lossy()));
             }
         }
         Ok(())
