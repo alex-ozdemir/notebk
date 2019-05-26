@@ -33,6 +33,13 @@ impl NotebkPath {
         }
         Ok(path_buf)
     }
+
+    pub fn from_opt(opt: &Option<String>) -> Result<Self, ()> {
+        match opt.as_ref() {
+            Some(ref string) => NotebkPath::from_str(string.as_str()),
+            None => Ok(NotebkPath::default()),
+        }
+    }
 }
 
 impl FromStr for NotebkPath {
@@ -60,6 +67,15 @@ impl FromStr for NotebkPath {
     }
 }
 
+impl Default for NotebkPath {
+    fn default() -> Self {
+        Self {
+            folders: Vec::new(),
+            number: None,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     Delete(NotebkPath),
@@ -73,20 +89,20 @@ impl Action {
     pub fn parse(args: Args) -> Result<Self, ()> {
         Ok(if args.cmd_ls {
             Action::List(
-                NotebkPath::from_str(&args.arg_path.unwrap_or_else(String::new))?,
+                NotebkPath::from_opt(&args.arg_path)?,
                 args.arg_count.unwrap_or(10),
             )
         } else if args.cmd_which {
-            Action::Which(NotebkPath::from_str(&args.arg_path.unwrap())?)
+            Action::Which(NotebkPath::from_opt(&args.arg_path)?)
         } else if args.cmd_mv {
             Action::Move(
-                NotebkPath::from_str(&args.arg_src.unwrap())?,
-                NotebkPath::from_str(&args.arg_dst.unwrap())?,
+                NotebkPath::from_opt(&args.arg_src)?,
+                NotebkPath::from_opt(&args.arg_dst)?,
             )
         } else if args.cmd_delete {
             Action::Delete(NotebkPath::from_str(&args.arg_path.unwrap())?)
         } else {
-            Action::Open(NotebkPath::from_str(&args.arg_path.unwrap())?)
+            Action::Open(NotebkPath::from_opt(&args.arg_path)?)
         })
     }
 

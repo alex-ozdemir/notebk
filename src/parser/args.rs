@@ -11,6 +11,7 @@ Usage:
   notebk <path> which
   notebk <path> delete
   notebk <path>
+  notebk
   notebk mv <src> <dst>
   notebk -h | --help
 

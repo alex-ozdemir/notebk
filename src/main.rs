@@ -62,7 +62,11 @@ fn list(dir_path: &Path, n: usize) -> io::Result<()> {
                     Green.paint(first_line.as_ref().map(String::as_str).unwrap_or("<empty>"))
                 );
             } else {
-                println!("{:2}  {}/", i + 1, Blue.paint(entry.file_name().to_string_lossy()));
+                println!(
+                    "{:2}  {}/",
+                    i + 1,
+                    Blue.paint(entry.file_name().to_string_lossy())
+                );
             }
         }
         Ok(())
@@ -198,7 +202,8 @@ fn execute(action: Action) -> io::Result<()> {
         Action::Open(notebk_path) => {
             let file_path = to_file_path(&notebk_path, &base)?;
             make_writable(&file_path)?;
-            std::process::Command::new("vim").arg(&file_path).status()?;
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_owned());
+            std::process::Command::new(&editor).arg(&file_path).status()?;
             cleanup(&file_path)
         }
         Action::Move(src_notebk_path, dst_notebk_path) => {
