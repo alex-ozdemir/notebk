@@ -71,7 +71,7 @@ fn list(dir_path: &Path, n: usize) -> io::Result<()> {
         }
         Ok(())
     } else {
-        println!("That doesn't exist");
+        println!("The path `{}` doesn't exist", dir_path.to_str().unwrap_or("INVALID UNICODE"));
         Ok(())
     }
 }
