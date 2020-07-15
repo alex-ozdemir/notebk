@@ -76,10 +76,10 @@ fn list(dir_path: &Path, n: usize) -> io::Result<()> {
     }
 }
 
-fn most_recent(node: &fs::DirEntry) -> chrono::NaiveDate {
+fn most_recent(node: &fs::DirEntry) -> Option<chrono::NaiveDate> {
     let ft = node.file_type().unwrap();
     if ft.is_file() {
-        chrono::NaiveDate::parse_from_str(
+        Some(chrono::NaiveDate::parse_from_str(
             node.file_name().to_str().unwrap_or_else(|| {
                 eprintln!("Could not parse entry {} as a date", node.path().display());
                 std::process::exit(1)
@@ -93,8 +93,8 @@ fn most_recent(node: &fs::DirEntry) -> chrono::NaiveDate {
                 e
             );
             std::process::exit(1)
-        })
-    } else if ft.is_dir() {
+        }))
+    } else if ft.is_dir() && node.file_name().to_string_lossy() != ".git" {
         fs::read_dir(&node.path())
             .unwrap_or_else(|e| {
                 eprintln!(
@@ -115,11 +115,12 @@ fn most_recent(node: &fs::DirEntry) -> chrono::NaiveDate {
                     std::process::exit(1)
                 })
             })
-            .map(|e| most_recent(&e))
+            .filter_map(|e| most_recent(&e))
             .max()
-            .unwrap_or(chrono::offset::Local::today().naive_local())
-    } else {
+    } else if ft.is_symlink() {
         panic!("Unexpected sym link at {}", node.path().display())
+    } else {
+        None
     }
 }
 
