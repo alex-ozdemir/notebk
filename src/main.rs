@@ -9,6 +9,7 @@ use std::io;
 use std::io::BufRead;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use ansi_term::Colour::{Blue, Green};
 
@@ -71,7 +72,10 @@ fn list(dir_path: &Path, n: usize) -> io::Result<()> {
         }
         Ok(())
     } else {
-        println!("The path `{}` doesn't exist", dir_path.to_str().unwrap_or("INVALID UNICODE"));
+        println!(
+            "The path `{}` doesn't exist",
+            dir_path.to_str().unwrap_or("INVALID UNICODE")
+        );
         Ok(())
     }
 }
@@ -79,21 +83,23 @@ fn list(dir_path: &Path, n: usize) -> io::Result<()> {
 fn most_recent(node: &fs::DirEntry) -> Option<chrono::NaiveDate> {
     let ft = node.file_type().unwrap();
     if ft.is_file() {
-        Some(chrono::NaiveDate::parse_from_str(
-            node.file_name().to_str().unwrap_or_else(|| {
-                eprintln!("Could not parse entry {} as a date", node.path().display());
+        Some(
+            chrono::NaiveDate::parse_from_str(
+                node.file_name().to_str().unwrap_or_else(|| {
+                    eprintln!("Could not parse entry {} as a date", node.path().display());
+                    std::process::exit(1)
+                }),
+                "%Y-%m-%d.md",
+            )
+            .unwrap_or_else(|e| {
+                eprintln!(
+                    "Could not parse entry {} as a date because {}",
+                    node.path().display(),
+                    e
+                );
                 std::process::exit(1)
             }),
-            "%Y-%m-%d.md",
         )
-        .unwrap_or_else(|e| {
-            eprintln!(
-                "Could not parse entry {} as a date because {}",
-                node.path().display(),
-                e
-            );
-            std::process::exit(1)
-        }))
     } else if ft.is_dir() && node.file_name().to_string_lossy() != ".git" {
         fs::read_dir(&node.path())
             .unwrap_or_else(|e| {
@@ -181,6 +187,23 @@ fn verify_is_file(file: &Path) -> io::Result<()> {
     }
 }
 
+fn sync<P: AsRef<Path>>(base_path: &P) -> io::Result<()> {
+    let base_path: &Path = base_path.as_ref();
+    Command::new("git")
+        .current_dir(base_path)
+        .arg("pull")
+        .status()?;
+    Command::new("git")
+        .current_dir(base_path)
+        .args(["commit", "-a", "-m", "sync"])
+        .status()?;
+    Command::new("git")
+        .current_dir(base_path)
+        .arg("push")
+        .status()?;
+    Ok(())
+}
+
 fn execute(action: Action) -> io::Result<()> {
     let base = get_directory()?;
     match action {
@@ -200,11 +223,12 @@ fn execute(action: Action) -> io::Result<()> {
             let dir_path = notebk_path.to_dir_path(&base)?;
             list(&dir_path, n)
         }
+        Action::Sync => sync(&base),
         Action::Open(notebk_path) => {
             let file_path = to_file_path(&notebk_path, &base)?;
             make_writable(&file_path)?;
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_owned());
-            std::process::Command::new(&editor).arg(&file_path).status()?;
+            Command::new(&editor).arg(&file_path).status()?;
             cleanup(&file_path)
         }
         Action::Move(src_notebk_path, dst_notebk_path) => {

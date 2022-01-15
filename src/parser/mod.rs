@@ -83,6 +83,7 @@ pub enum Action {
     List(NotebkPath, usize),
     Move(NotebkPath, NotebkPath),
     Open(NotebkPath),
+    Sync,
 }
 
 impl Action {
@@ -101,6 +102,8 @@ impl Action {
             )
         } else if args.cmd_delete {
             Action::Delete(NotebkPath::from_str(&args.arg_path.unwrap())?)
+        } else if args.cmd_sync {
+            Action::Sync
         } else {
             Action::Open(NotebkPath::from_opt(&args.arg_path)?)
         })
