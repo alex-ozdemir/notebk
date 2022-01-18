@@ -1,8 +1,8 @@
 extern crate ansi_term;
-extern crate chrono;
 extern crate dirs;
 extern crate docopt;
 extern crate serde;
+extern crate time;
 
 use std::fs;
 use std::io;
@@ -10,12 +10,19 @@ use std::io::BufRead;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use time::{macros::format_description, Date, OffsetDateTime};
 
 use ansi_term::Colour::{Blue, Green};
 
 mod parser;
 
 use parser::{Action, NotebkPath};
+
+fn today_string() -> String {
+    let fd = format_description!("[year]-[month]-[day].md");
+    let date = OffsetDateTime::now_local().expect("local time").date();
+    date.format(fd).expect("format date")
+}
 
 fn to_file_path(path: &NotebkPath, directory: &str) -> io::Result<PathBuf> {
     let mut path_buf = path.inner_to_dir_path(directory)?;
@@ -30,9 +37,7 @@ fn to_file_path(path: &NotebkPath, directory: &str) -> io::Result<PathBuf> {
                 ))?;
             path_buf.push(entry.file_name())
         }
-        None => {
-            path_buf.push(format!("{}", chrono::Local::now().format("%Y-%m-%d.md")));
-        }
+        None => path_buf.push(today_string()),
     }
     Ok(path_buf)
 }
@@ -80,16 +85,17 @@ fn list(dir_path: &Path, n: usize) -> io::Result<()> {
     }
 }
 
-fn most_recent(node: &fs::DirEntry) -> Option<chrono::NaiveDate> {
+fn most_recent(node: &fs::DirEntry) -> Option<Date> {
     let ft = node.file_type().unwrap();
     if ft.is_file() {
+        let fd = format_description!("[year]-[month]-[day].md");
         Some(
-            chrono::NaiveDate::parse_from_str(
+            Date::parse(
                 node.file_name().to_str().unwrap_or_else(|| {
                     eprintln!("Could not parse entry {} as a date", node.path().display());
                     std::process::exit(1)
                 }),
-                "%Y-%m-%d.md",
+                fd,
             )
             .unwrap_or_else(|e| {
                 eprintln!(
