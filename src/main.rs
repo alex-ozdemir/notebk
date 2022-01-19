@@ -16,7 +16,7 @@ mod parser;
 
 use parser::{
     action::{Action, NotebkPath},
-    args::get_args_or_exit,
+    get_args_or_exit,
 };
 
 fn today_string() -> String {
