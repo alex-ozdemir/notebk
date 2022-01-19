@@ -1,7 +1,5 @@
 extern crate ansi_term;
 extern crate dirs;
-extern crate docopt;
-extern crate serde;
 extern crate time;
 
 use std::fs;
@@ -16,7 +14,10 @@ use ansi_term::Colour::{Blue, Green};
 
 mod parser;
 
-use parser::{Action, NotebkPath};
+use parser::{
+    action::{Action, NotebkPath},
+    args::get_args_or_exit,
+};
 
 fn today_string() -> String {
     let fd = format_description!("[year]-[month]-[day].md");
@@ -255,13 +256,7 @@ fn execute(action: Action) -> io::Result<()> {
 }
 
 fn main() {
-    let action = match Action::from_args() {
-        Ok(a) => a,
-        Err(()) => {
-            eprintln!("Could not parse");
-            std::process::exit(2)
-        }
-    };
+    let action = get_args_or_exit();
     std::process::exit(
         execute(action)
             .map_err(|e| println!("Error: {}", e))
