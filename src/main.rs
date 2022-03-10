@@ -202,6 +202,10 @@ fn sync<P: AsRef<Path>>(base_path: &P) -> io::Result<()> {
         .status()?;
     Command::new("git")
         .current_dir(base_path)
+        .args(["add", "."])
+        .status()?;
+    Command::new("git")
+        .current_dir(base_path)
         .args(["commit", "-a", "-m", "sync"])
         .status()?;
     Command::new("git")
