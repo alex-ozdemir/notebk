@@ -3,11 +3,9 @@ extern crate dirs;
 extern crate time;
 
 use std::fs;
-use std::io;
-use std::io::BufRead;
-use std::io::Read;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use time::{macros::format_description, Date, OffsetDateTime};
 
 use ansi_term::Colour::{Blue, Green};
@@ -54,20 +52,21 @@ fn read_file<P: AsRef<Path>>(path: P) -> io::Result<String> {
     })
 }
 
+/// An entry's title: its first non-blank line, or `<empty>`.
+fn title_of(contents: &str) -> &str {
+    contents
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("<empty>")
+}
+
 fn list(dir_path: &Path, n: usize) -> io::Result<()> {
     if dir_path.exists() {
         for (i, entry) in entries(dir_path)?.into_iter().take(n).enumerate() {
             if entry.file_type()?.is_file() {
-                let first_line = std::io::BufReader::new(fs::File::open(entry.path())?)
-                    .lines()
-                    .filter_map(Result::ok)
-                    .filter(|r| r.len() > 0)
-                    .next();
-                println!(
-                    "{:2}  {}",
-                    i + 1,
-                    Green.paint(first_line.as_ref().map(String::as_str).unwrap_or("<empty>"))
-                );
+                let contents = read_file(entry.path())?;
+                println!("{:2}  {}", i + 1, Green.paint(title_of(&contents)));
             } else {
                 println!(
                     "{:2}  {}/",
@@ -194,6 +193,203 @@ fn verify_is_file(file: &Path) -> io::Result<()> {
     }
 }
 
+fn open_in_editor(file_path: &Path, line: Option<usize>) -> io::Result<()> {
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_owned());
+    let mut cmd = Command::new(&editor);
+    if let Some(n) = line {
+        // `+N` is the usual convention, but a GUI editor like `code` would
+        // take it as a filename, so only pass it to editors known to accept it.
+        if matches!(
+            Path::new(&editor).file_name().and_then(|s| s.to_str()),
+            Some("vim" | "nvim" | "vi" | "view" | "emacs" | "nano" | "micro" | "joe" | "kak")
+        ) {
+            cmd.arg(format!("+{}", n));
+        }
+    }
+    cmd.arg(file_path);
+    cmd.status()?;
+    Ok(())
+}
+
+fn sanitize(s: &str) -> String {
+    s.replace(['\t', '\n'], " ")
+}
+
+/// Display widths of the fixed-width columns in the fzf list.
+const PATH_WIDTH: usize = 15;
+const TITLE_WIDTH: usize = 35;
+
+/// 0-based positions of the hidden trailing fields of each row, which fzf
+/// does not display but the preview command and the selection parsing use.
+const LINE_FIELD: usize = 3;
+const ABS_PATH_FIELD: usize = 4;
+
+/// Truncates `s` to `width` characters, padding it out to exactly that many,
+/// so the fzf list keeps fixed-width columns.
+fn fit(s: &str, width: usize) -> String {
+    format!("{:<width$.width$}", s, width = width)
+}
+
+/// (line number, note date, the tab-separated fzf row)
+type FzfCandidate = (usize, Date, String);
+
+/// Writes one fzf candidate line per non-blank line of `entry`'s contents.
+/// 
+/// Each line carries, tab-separated:
+/// 
+/// * the *notebk path* (folders/number, as `to_file_path` uses)
+/// * the *title* (first non-blank line of the entry)
+/// * the line's text (sanitized)
+/// * (hidden) the line number (1-based, as `bat` expects for its `--highlight-line` option)
+/// * (hidden) the absolute path to the entry file, for the preview command and for
+///   opening the selected entry in $EDITOR.
+/// 
+/// The first three are displayed in the fzf list, with the first two padded to
+/// fixed widths so they align across rows. The last two fields are hidden, but
+/// used by the preview command and for opening the selected entry in $EDITOR.
+/// 
+/// The list is ordered by line number (1 first), then by date (most recent
+/// first).
+fn emit_candidates(
+    entry: &fs::DirEntry,
+    folders: &[String],
+    number: usize,
+    out: &mut Vec<FzfCandidate>,
+) {
+    let notebk_path = if folders.is_empty() {
+        number.to_string()
+    } else {
+        format!("{}/{}", folders.join("/"), number)
+    };
+    let notebk_path = fit(&sanitize(&notebk_path), PATH_WIDTH);
+
+    let date = most_recent(entry).expect("dated file");
+
+    let abs_path = entry.path();
+    let abs_path_str = sanitize(&abs_path.to_string_lossy());
+
+    let contents = read_file(&abs_path).unwrap_or_default();
+    let mut lines: Vec<(usize, &str)> = contents
+        .lines()
+        .enumerate()
+        .map(|(i, l)| (i + 1, l.trim()))
+        .filter(|(_, l)| !l.is_empty())
+        .collect();
+    // An entry with nothing in it still gets a row, so it stays findable.
+    if lines.is_empty() {
+        lines.push((1, title_of(&contents)));
+    }
+    let title = fit(&sanitize(lines[0].1), TITLE_WIDTH);
+
+    for (n, text) in lines {
+        out.push((
+            n,
+            date,
+            format!(
+                "{} \t{} \t{}\t{}\t{}",
+                notebk_path,
+                title,
+                sanitize(text),
+                n,
+                abs_path_str
+            ),
+        ));
+    }
+}
+
+/// Recursively walks `dir`, numbering entries the same way `entries()`
+/// already does for `ls` and path resolution, and emits fzf candidates for
+/// every file found (skipping `.git`).
+fn collect_candidates(
+    dir: &Path,
+    folders: &[String],
+    out: &mut Vec<FzfCandidate>,
+) -> io::Result<()> {
+    for (i, entry) in entries(dir)?.into_iter().enumerate() {
+        let number = i + 1;
+        let file_type = entry.file_type()?;
+        if file_type.is_file() {
+            emit_candidates(&entry, folders, number, out);
+        } else if file_type.is_dir() && entry.file_name() != ".git" {
+            let mut sub_folders = folders.to_vec();
+            sub_folders.push(entry.file_name().to_string_lossy().into_owned());
+            collect_candidates(&entry.path(), &sub_folders, out)?;
+        }
+    }
+    Ok(())
+}
+
+/// Fuzzy-find a note by notebk path, title, or contents (via the `fzf`
+/// binary) and open the selected one in $EDITOR.
+fn find(base: &str) -> io::Result<()> {
+    let base_path = Path::new(base);
+    let mut rows = Vec::new();
+    if base_path.exists() {
+        collect_candidates(base_path, &[], &mut rows)?;
+    }
+    // Titles (line 1) first, then deeper lines; most recent notes first within
+    // each line number.
+    rows.sort_by_key(|(line, date, _)| (*line, std::cmp::Reverse(*date)));
+
+    let header = format!(
+        "--header={} \t{} \tline",
+        fit("path", PATH_WIDTH),
+        fit("title", TITLE_WIDTH)
+    );
+    // fzf's field placeholders are 1-based.
+    let preview = format!(
+        "--preview=bat --style=numbers --color=always --paging=never --highlight-line {{{line}}} -- {{{path}}} 2>/dev/null || cat -- {{{path}}}",
+        line = LINE_FIELD + 1,
+        path = ABS_PATH_FIELD + 1
+    );
+    let mut child = Command::new("fzf")
+        .args([
+            "--delimiter=\t",
+            "--with-nth=1,2,3",
+            // The columns are padded to fixed widths, so a tab must occupy a
+            // single column or it would push them back out of alignment.
+            "--tabstop=1",
+            "--tiebreak=index",
+            "--prompt=notebk> ",
+            "--height=100%",
+            "--layout=reverse",
+            &header,
+            &preview,
+            "--preview-window=right:30%:nowrap",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == io::ErrorKind::NotFound {
+                io::Error::new(io::ErrorKind::NotFound, "fzf not found; please install it")
+            } else {
+                e
+            }
+        })?;
+
+    {
+        // The handle has to drop at the end of this scope, or fzf never sees
+        // EOF on its stdin and waits forever.
+        let mut stdin = io::BufWriter::new(child.stdin.take().expect("fzf stdin was piped"));
+        for (_, _, row) in &rows {
+            writeln!(stdin, "{}", row)?;
+        }
+    }
+
+    let output = child.wait_with_output()?;
+    let selection = String::from_utf8_lossy(&output.stdout);
+    let selection = selection.trim();
+    if selection.is_empty() {
+        return Ok(());
+    }
+
+    let mut fields = selection.split('\t').skip(LINE_FIELD);
+    let line = fields.next().and_then(|s| s.parse::<usize>().ok());
+    let abs_path = fields.next().unwrap_or("");
+    open_in_editor(Path::new(abs_path), line)
+}
+
 fn sync<P: AsRef<Path>>(base_path: &P) -> io::Result<()> {
     let base_path: &Path = base_path.as_ref();
     Command::new("git")
@@ -235,11 +431,11 @@ fn execute(action: Action) -> io::Result<()> {
             list(&dir_path, n)
         }
         Action::Sync => sync(&base),
+        Action::Find => find(&base),
         Action::Open(notebk_path) => {
             let file_path = to_file_path(&notebk_path, &base)?;
             make_writable(&file_path)?;
-            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_owned());
-            Command::new(&editor).arg(&file_path).status()?;
+            open_in_editor(&file_path, None)?;
             cleanup(&file_path)
         }
         Action::Move(src_notebk_path, dst_notebk_path) => {

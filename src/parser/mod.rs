@@ -16,6 +16,7 @@ Usage:
   notebk <path> delete
   notebk <path>
   notebk
+  notebk find
   notebk mv <src> <dst>
   notebk -h | --help
 
@@ -32,6 +33,9 @@ Actions:
   mv      move the entry at <src> to <dst>
 
   <path>  open the entry at <path>
+
+  find    fuzzy-find (via fzf) an entry by file name, title, or contents,
+          then open it
 
   sync    assuming that *notebook path* is a git repository:
           1. Pulls
@@ -50,6 +54,7 @@ pub enum Keyword {
     Which,
     Delete,
     Mv,
+    Find,
 }
 
 impl Keyword {
@@ -60,6 +65,7 @@ impl Keyword {
             "which" => Some(Keyword::Which),
             "delete" => Some(Keyword::Delete),
             "mv" => Some(Keyword::Mv),
+            "find" => Some(Keyword::Find),
             _ => None,
         }
     }
@@ -93,6 +99,7 @@ fn get_args_opt(mut args: Vec<String>) -> Option<Action> {
     };
     match keywords.as_slice() {
         [Sync] => (args.len() == 0).then(|| Action::Sync),
+        [Find] => (args.len() == 0).then(|| Action::Find),
         [Mv] => {
             if args.len() == 2 {
                 Some(Action::Move(shift_path(&mut args)?, shift_path(&mut args)?))
@@ -189,6 +196,13 @@ mod tests {
             })),
             actual
         );
+    }
+
+    #[test]
+    fn parse_find() {
+        let input = vec!["notebk", "find"];
+        let actual = get_args_opt(input.into_iter().map(ToString::to_string).collect());
+        assert_eq!(Some(Action::Find), actual);
     }
 
     #[test]

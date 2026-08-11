@@ -72,5 +72,6 @@ pub enum Action {
     List(NotebkPath, usize),
     Move(NotebkPath, NotebkPath),
     Open(NotebkPath),
+    Find,
     Sync,
 }
