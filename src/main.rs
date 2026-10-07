@@ -5,7 +5,7 @@ extern crate time;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use time::{macros::format_description, Date, OffsetDateTime};
 
 use ansi_term::Colour::{Blue, Green};
@@ -390,29 +390,107 @@ fn find(base: &str) -> io::Result<()> {
     open_in_editor(Path::new(abs_path), line)
 }
 
+fn git(base_path: &Path, args: &[&str]) -> io::Result<()> {
+    Command::new("git")
+        .current_dir(base_path)
+        .args(args)
+        .status()?;
+    Ok(())
+}
+
 fn sync<P: AsRef<Path>>(base_path: &P) -> io::Result<()> {
     let base_path: &Path = base_path.as_ref();
-    Command::new("git")
-        .current_dir(base_path)
-        .arg("pull")
-        .status()?;
-    Command::new("git")
-        .current_dir(base_path)
-        .args(["add", "."])
-        .status()?;
-    Command::new("git")
-        .current_dir(base_path)
-        .args(["commit", "-a", "-m", "sync"])
-        .status()?;
-    Command::new("git")
-        .current_dir(base_path)
-        .arg("push")
-        .status()?;
+    git(base_path, &["pull"])?;
+    git(base_path, &["add", "."])?;
+    git(base_path, &["commit", "-a", "-m", "sync"])?;
+    git(base_path, &["push"])
+}
+
+/// Runs git in `base_path` with its output captured rather than shown.
+fn git_quiet(base_path: &Path, args: &[&str]) -> io::Result<Output> {
+    Command::new("git").current_dir(base_path).args(args).output()
+}
+
+/// Like `git_quiet`, but a non-zero exit is an error carrying git's output.
+fn git_checked(base_path: &Path, args: &[&str]) -> io::Result<Output> {
+    let output = git_quiet(base_path, args)?;
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!(
+                "`git {}` failed:\n{}{}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr).trim_end()
+            ),
+        ))
+    }
+}
+
+fn is_git_repo(base_path: &Path) -> bool {
+    git_quiet(base_path, &["rev-parse", "--git-dir"]).map_or(false, |o| o.status.success())
+}
+
+/// Commits local changes, pulls, and pushes.
+///
+/// If the pull conflicts, the repository is rolled back to how it was before
+/// the attempt and an error is returned. If the pull or push fails for any
+/// other reason (e.g., no network), only a warning is printed.
+fn try_sync(base_path: &Path) -> io::Result<()> {
+    // Unset only before the first commit, when a pull can't conflict.
+    let orig_head = git_checked(base_path, &["rev-parse", "--verify", "-q", "HEAD"])
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+
+    git_checked(base_path, &["add", "-A"])?;
+    let nothing_staged = git_quiet(base_path, &["diff", "--cached", "--quiet"])?
+        .status
+        .success();
+    if !nothing_staged {
+        git_checked(base_path, &["commit", "-q", "-m", "sync"])?;
+    }
+
+    let result = git_checked(base_path, &["pull", "-q", "--no-rebase", "--no-edit"])
+        .and_then(|_| git_checked(base_path, &["push", "-q"]).map(|_| ()));
+    if let Err(e) = result {
+        let conflicted = !git_checked(base_path, &["ls-files", "-u"])?.stdout.is_empty();
+        if !conflicted {
+            eprintln!("Warning: could not sync with remote: {}", e);
+            return Ok(());
+        }
+        git_checked(base_path, &["merge", "--abort"])?;
+        if let Some(h) = &orig_head {
+            git_checked(base_path, &["reset", "-q", h])?;
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!(
+                "{}\nRolled back the sync attempt; your changes are uncommitted in {}",
+                e,
+                base_path.display()
+            ),
+        ));
+    }
     Ok(())
 }
 
 fn execute(action: Action) -> io::Result<()> {
     let base = get_directory()?;
+    let modifies = matches!(
+        action,
+        Action::Delete(_) | Action::Move(..) | Action::Open(_) | Action::Find
+    );
+    perform(action, &base)?;
+    let base_path = Path::new(&base);
+    if modifies && is_git_repo(base_path) {
+        try_sync(base_path)?;
+    }
+    Ok(())
+}
+
+fn perform(action: Action, base: &str) -> io::Result<()> {
     match action {
         Action::Delete(notebk_path) => {
             let file_path = to_file_path(&notebk_path, &base)?;
