@@ -65,13 +65,22 @@ impl Default for NotebkPath {
     }
 }
 
+/// Which editor opens an entry.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Editor {
+    /// $EDITOR (default: vim)
+    Env,
+    /// VS Code, via `code --wait`
+    Code,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     Delete(NotebkPath),
     Which(NotebkPath),
     List(NotebkPath, usize),
     Move(NotebkPath, NotebkPath),
-    Open(NotebkPath),
-    Find,
+    Open(NotebkPath, Editor),
+    Find(Editor),
     Sync,
 }

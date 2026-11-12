@@ -13,7 +13,7 @@ use ansi_term::Colour::{Blue, Green};
 mod parser;
 
 use parser::{
-    action::{Action, NotebkPath},
+    action::{Action, Editor, NotebkPath},
     get_args_or_exit,
 };
 
@@ -193,7 +193,20 @@ fn verify_is_file(file: &Path) -> io::Result<()> {
     }
 }
 
-fn open_in_editor(file_path: &Path, line: Option<usize>) -> io::Result<()> {
+fn open_in_editor(file_path: &Path, line: Option<usize>, editor: Editor) -> io::Result<()> {
+    if editor == Editor::Code {
+        // `--wait` so that cleanup and sync run after the tab is closed, not right away.
+        let mut cmd = Command::new("code");
+        cmd.arg("--wait");
+        match line {
+            Some(n) => cmd
+                .arg("--goto")
+                .arg(format!("{}:{}", file_path.display(), n)),
+            None => cmd.arg(file_path),
+        };
+        cmd.status()?;
+        return Ok(());
+    }
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_owned());
     let mut cmd = Command::new(&editor);
     if let Some(n) = line {
@@ -320,8 +333,8 @@ fn collect_candidates(
 }
 
 /// Fuzzy-find a note by notebk path, title, or contents (via the `fzf`
-/// binary) and open the selected one in $EDITOR.
-fn find(base: &str) -> io::Result<()> {
+/// binary) and open the selected one in `editor`.
+fn find(base: &str, editor: Editor) -> io::Result<()> {
     let base_path = Path::new(base);
     let mut rows = Vec::new();
     if base_path.exists() {
@@ -387,7 +400,7 @@ fn find(base: &str) -> io::Result<()> {
     let mut fields = selection.split('\t').skip(LINE_FIELD);
     let line = fields.next().and_then(|s| s.parse::<usize>().ok());
     let abs_path = fields.next().unwrap_or("");
-    open_in_editor(Path::new(abs_path), line)
+    open_in_editor(Path::new(abs_path), line, editor)
 }
 
 fn git(base_path: &Path, args: &[&str]) -> io::Result<()> {
@@ -480,7 +493,7 @@ fn execute(action: Action) -> io::Result<()> {
     let base = get_directory()?;
     let modifies = matches!(
         action,
-        Action::Delete(_) | Action::Move(..) | Action::Open(_) | Action::Find
+        Action::Delete(_) | Action::Move(..) | Action::Open(..) | Action::Find(_)
     );
     perform(action, &base)?;
     let base_path = Path::new(&base);
@@ -509,11 +522,11 @@ fn perform(action: Action, base: &str) -> io::Result<()> {
             list(&dir_path, n)
         }
         Action::Sync => sync(&base),
-        Action::Find => find(&base),
-        Action::Open(notebk_path) => {
+        Action::Find(editor) => find(&base, editor),
+        Action::Open(notebk_path, editor) => {
             let file_path = to_file_path(&notebk_path, &base)?;
             make_writable(&file_path)?;
-            open_in_editor(&file_path, None)?;
+            open_in_editor(&file_path, None, editor)?;
             cleanup(&file_path)
         }
         Action::Move(src_notebk_path, dst_notebk_path) => {

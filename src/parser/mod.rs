@@ -14,14 +14,15 @@ Usage:
   notebk <path> ls [<count>]
   notebk <path> which
   notebk <path> delete
-  notebk <path>
-  notebk
-  notebk find
+  notebk <path> [-c | --code]
+  notebk [-c | --code]
+  notebk find [-c | --code]
   notebk mv <src> <dst>
   notebk -h | --help
 
 Options:
   -h --help  Show this screen.
+  -c --code  Open the entry in VS Code instead of $EDITOR.
 
 Actions:
   ls      list up to <count> (default 10) items from <path>
@@ -84,6 +85,13 @@ pub fn get_args_or_exit() -> Action {
 fn get_args_opt(mut args: Vec<String>) -> Option<Action> {
     use self::Keyword::*;
     args.remove(0);
+    let n_args = args.len();
+    args.retain(|a| a != "--code" && a != "-c");
+    let editor = if args.len() < n_args {
+        Editor::Code
+    } else {
+        Editor::Env
+    };
     let mut keywords: Vec<Keyword> = Vec::new();
     let ls_idx = args.iter().position(|a| a == "ls");
     args.retain(|a| {
@@ -97,9 +105,9 @@ fn get_args_opt(mut args: Vec<String>) -> Option<Action> {
     let shift_path = |args: &mut Vec<String>| -> Option<NotebkPath> {
         NotebkPath::from_str(&args.remove(0)).ok()
     };
-    match keywords.as_slice() {
+    let action = match keywords.as_slice() {
         [Sync] => (args.len() == 0).then(|| Action::Sync),
-        [Find] => (args.len() == 0).then(|| Action::Find),
+        [Find] => (args.len() == 0).then(|| Action::Find(editor)),
         [Mv] => {
             if args.len() == 2 {
                 Some(Action::Move(shift_path(&mut args)?, shift_path(&mut args)?))
@@ -123,9 +131,9 @@ fn get_args_opt(mut args: Vec<String>) -> Option<Action> {
         }
         [] => {
             if args.len() == 1 {
-                Some(Action::Open(shift_path(&mut args)?))
+                Some(Action::Open(shift_path(&mut args)?, editor))
             } else {
-                Some(Action::Open(NotebkPath::default()))
+                Some(Action::Open(NotebkPath::default(), editor))
             }
         }
         [Ls] => {
@@ -153,6 +161,12 @@ fn get_args_opt(mut args: Vec<String>) -> Option<Action> {
             }
         }
         _ => None,
+    };
+    // Only actions that open an entry take `-c`/`--code`.
+    match action {
+        Some(Action::Open(..) | Action::Find(_)) => action,
+        _ if editor == Editor::Code => None,
+        _ => action,
     }
 }
 
@@ -190,10 +204,13 @@ mod tests {
         let input = vec!["notebk", "puzzles/math/4"];
         let actual = get_args_opt(input.into_iter().map(ToString::to_string).collect());
         assert_eq!(
-            Some(Action::Open(NotebkPath {
-                folders: vec!["puzzles".to_owned(), "math".to_owned()],
-                number: Some(4),
-            })),
+            Some(Action::Open(
+                NotebkPath {
+                    folders: vec!["puzzles".to_owned(), "math".to_owned()],
+                    number: Some(4),
+                },
+                Editor::Env
+            )),
             actual
         );
     }
@@ -202,7 +219,37 @@ mod tests {
     fn parse_find() {
         let input = vec!["notebk", "find"];
         let actual = get_args_opt(input.into_iter().map(ToString::to_string).collect());
-        assert_eq!(Some(Action::Find), actual);
+        assert_eq!(Some(Action::Find(Editor::Env)), actual);
+    }
+
+    #[test]
+    fn parse_find_code() {
+        let input = vec!["notebk", "find", "-c"];
+        let actual = get_args_opt(input.into_iter().map(ToString::to_string).collect());
+        assert_eq!(Some(Action::Find(Editor::Code)), actual);
+    }
+
+    #[test]
+    fn parse_open_code() {
+        let input = vec!["notebk", "--code", "puzzles/4"];
+        let actual = get_args_opt(input.into_iter().map(ToString::to_string).collect());
+        assert_eq!(
+            Some(Action::Open(
+                NotebkPath {
+                    folders: vec!["puzzles".to_owned()],
+                    number: Some(4),
+                },
+                Editor::Code
+            )),
+            actual
+        );
+    }
+
+    #[test]
+    fn parse_ls_code() {
+        let input = vec!["notebk", "ls", "--code"];
+        let actual = get_args_opt(input.into_iter().map(ToString::to_string).collect());
+        assert_eq!(None, actual);
     }
 
     #[test]
